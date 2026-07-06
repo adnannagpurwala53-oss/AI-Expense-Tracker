@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Expense Tracker AI</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+</head>
+<body>
+    <div class="app">
+        <div class="sidebar">
+            <div class="logo">
+                <h2>💰 Budget AI</h2>
+            </div>
+            <nav>
+                <button class="nav-btn active" onclick="showSection('dashboard')">📊 Dashboard</button>
+                <button class="nav-btn" onclick="showSection('expenses')">📋 Expenses</button>
+                <button class="nav-btn" onclick="showSection('suggestions')">🤖 AI Suggestions</button>
+            </nav>
+            <div class="sidebar-summary" id="sidebarSummary">
+                <div class="summary-item">
+                    <span>Total Spent</span>
+                    <strong id="totalSpent">AED 0</strong>
+                </div>
+                <div class="summary-item">
+                    <span>Total Budget</span>
+                    <strong id="totalBudget">AED 0</strong>
+                </div>
+                <div class="summary-item">
+                    <span>Transactions</span>
+                    <strong id="expenseCount">0</strong>
+                </div>
+            </div>
+        </div>
+
+        <div class="main">
+            <!-- Dashboard Section -->
+            <div id="dashboard" class="section active">
+                <div class="section-header">
+                    <h1>Dashboard</h1>
+                    <button class="export-btn" onclick="exportCSV()">⬇️ Export CSV</button>
+                </div>
+
+                <!-- Add Expense Form -->
+                <div class="add-form">
+                    <h3>➕ Add Expense</h3>
+                    <div class="form-row">
+                        <input type="text" id="description" placeholder="Description (e.g. Pizza dinner)" />
+                        <input type="number" id="amount" placeholder="Amount (AED )" min="1" />
+                        <input type="date" id="date" />
+                        <button onclick="addExpense()">Add</button>
+                    </div>
+                    <p id="formStatus"></p>
+                </div>
+
+                <!-- Charts -->
+                <div class="charts-grid">
+                    <div class="chart-card">
+                        <h3>Spending by Category</h3>
+                        <canvas id="pieChart"></canvas>
+                    </div>
+                    <div class="chart-card">
+                        <h3>Budget vs Spent</h3>
+                        <canvas id="barChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Expenses Section -->
+            <div id="expenses" class="section">
+                <div class="section-header">
+                    <h1>All Expenses</h1>
+                </div>
+                <div class="expense-list" id="expenseList">
+                    <p class="empty-state">No expenses yet. Add your first expense!</p>
+                </div>
+            </div>
+
+            <!-- AI Suggestions Section -->
+            <div id="suggestions" class="section">
+                <div class="section-header">
+                    <h1>🤖 AI Budget Suggestions</h1>
+                </div>
+                <div id="suggestionsList" class="suggestions-list">
+                    <p class="empty-state">Add expenses to get AI suggestions!</p>
+                </div>
+
+                <!-- Category Budget Progress -->
+                <h3 style="margin-top: 30px; color: #333;">Budget Progress</h3>
+                <div id="budgetProgress" class="budget-progress"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let pieChart = null;
+        let barChart = null;
+
+        // Set today's date as default
+        document.getElementById("date").valueAsDate = new Date();
+
+        // Navigation
+        function showSection(name) {
+            document.querySelectorAll(".section").forEach(s => s.classList.remove("active"));
+            document.querySelectorAll(".nav-btn").forEach(b => b.classList.remove("active"));
+            document.getElementById(name).classList.add("active");
+            event.target.classList.add("active");
+            if (name === "suggestions") loadSuggestions();
+            if (name === "expenses") loadExpenses();
+        }
+
+        // Add expense
+        async function addExpense() {
+            const description = document.getElementById("description").value.trim();
+            const amount = parseFloat(document.getElementById("amount").value);
+            const date = document.getElementById("date").value;
+            const status = document.getElementById("formStatus");
+
+            if (!description) {
+                status.textContent = "❌ Please enter a description";
+                status.style.color = "red";
+                return;
+            }
+            if (!amount || amount <= 0) {
+                status.textContent = "❌ Please enter a valid amount";
+                status.style.color = "red";
+                return;
+            }
+
+            try {
+                const response = await fetch("/add", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ description, amount, date })
+                });
+
+                const data = await response.json();
+
+                if (data.error) {
+                    status.textContent = "❌ " + data.error;
+                    status.style.color = "red";
+                    return;
+                }
+
+                status.textContent = `✅ Added: ${data.expense.description} → ${data.expense.category}`;
+                status.style.color = "green";
+
+                document.getElementById("description").value = "";
+                document.getElementById("amount").value = "";
+
+                loadDashboard();
+
+            } catch (error) {
+                status.textContent = "❌ Error: " + error.message;
+                status.style.color = "red";
+            }
+        }
+
+        // Press Enter to add
+        document.getElementById("amount").addEventListener("keypress", (e) => {
+            if (e.key === "Enter") addExpense();
+        });
+
+        // Load dashboard charts
+        async function loadDashboard() {
+            const response = await fetch("/summary");
+            const data = await response.json();
+
+            document.getElementById("totalSpent").textContent = "AED " + data.total_spent.toFixed(0);
+            document.getElementById("totalBudget").textContent = "AED " + data.total_budget.toFixed(0);
+            document.getElementById("expenseCount").textContent = data.expense_count;
+
+            // Pie chart
+            const categories = Object.keys(data.category_totals);
+            const amounts = Object.values(data.category_totals);
+            const colors = ["#667eea","#764ba2","#f093fb","#f5576c","#4facfe","#00f2fe","#43e97b","#38f9d7"];
+
+            if (pieChart) pieChart.destroy();
+            const pieCtx = document.getElementById("pieChart").getContext("2d");
+            pieChart = new Chart(pieCtx, {
+                type: "pie",
+                data: {
+                    labels: categories,
+                    datasets: [{
+                        data: amounts,
+                        backgroundColor: colors
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: { position: "bottom" }
+                    }
+                }
+            });
+
+            // Bar chart
+            const allCategories = Object.keys(data.budgets);
+            const spentData = allCategories.map(c => data.category_totals[c] || 0);
+            const budgetData = allCategories.map(c => data.budgets[c] || 0);
+
+            if (barChart) barChart.destroy();
+            const barCtx = document.getElementById("barChart").getContext("2d");
+            barChart = new Chart(barCtx, {
+                type: "bar",
+                data: {
+                    labels: allCategories,
+                    datasets: [
+                        {
+                            label: "Spent",
+                            data: spentData,
+                            backgroundColor: "#f5576c"
+                        },
+                        {
+                            label: "Budget",
+                            data: budgetData,
+                            backgroundColor: "#667eea"
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: { beginAtZero: true }
+                    }
+                }
+            });
+        }
+
+        // Load all expenses
+        async function loadExpenses() {
+            const response = await fetch("/expenses");
+            const expenses = await response.json();
+            const list = document.getElementById("expenseList");
+
+            if (expenses.length === 0) {
+                list.innerHTML = "<p class='empty-state'>No expenses yet!</p>";
+                return;
+            }
+
+            list.innerHTML = expenses.reverse().map(e => `
+                <div class="expense-item">
+                    <div class="expense-info">
+                        <span class="expense-desc">${e.description}</span>
+                        <span class="expense-cat">${e.category}</span>
+                        <span class="expense-date">${e.date}</span>
+                    </div>
+                    <div class="expense-right">
+                        <span class="expense-amount">AED ${e.amount.toFixed(0)}</span>
+                        <button class="delete-btn" onclick="deleteExpense(${e.id})">🗑️</button>
+                    </div>
+                </div>
+            `).join("");
+        }
+
+        // Delete expense
+        async function deleteExpense(id) {
+            await fetch(`/delete/${id}`, { method: "DELETE" });
+            loadExpenses();
+            loadDashboard();
+        }
+
+        // Load AI suggestions
+        async function loadSuggestions() {
+            const response = await fetch("/summary");
+            const data = await response.json();
+
+            const list = document.getElementById("suggestionsList");
+            list.innerHTML = data.suggestions.map(s => `
+                <div class="suggestion-card">${s}</div>
+            `).join("");
+
+            const progress = document.getElementById("budgetProgress");
+            progress.innerHTML = Object.keys(data.budgets).map(cat => {
+                const spent = data.category_totals[cat] || 0;
+                const budget = data.budgets[cat];
+                const pct = Math.min((spent / budget) * 100, 100).toFixed(0);
+                const color = pct >= 100 ? "#f5576c" : pct >= 80 ? "#ffa726" : "#43e97b";
+                return `
+                    <div class="progress-item">
+                        <div class="progress-label">
+                            <span>${cat}</span>
+                            <span>AED ${spent.toFixed(0)} / AED ${budget}</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" style="width: ${pct}%; background: ${color};"></div>
+                        </div>
+                    </div>
+                `;
+            }).join("");
+        }
+
+        // Export CSV
+        function exportCSV() {
+            window.location.href = "/export";
+        }
+
+        // Initial load
+        loadDashboard();
+    </script>
+</body>
+</html>
